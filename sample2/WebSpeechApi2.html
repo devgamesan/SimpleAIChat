@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+Web Speech API 音声認識デモ
+
+■ 動作説明
+1. ユーザーが「音声認識を開始」ボタンをクリックすると、ブラウザの音声認識機能が起動します
+2. マイクから入力された音声をリアルタイムでテキスト変換し、画面上に表示します
+3. 3秒間無音状態が続くと自動的に認識を一時停止し、確定した結果を表示します
+4. 「音声認識を停止」ボタンで手動停止可能です
+5. エラー発生時には画面にエラーメッセージを表示します
+
+■ 主な機能
+- 日本語音声認識 (ja-JP)
+- 中間結果のリアルタイム表示
+- 無音状態の自動検出
+- 連続認識モード
+- エラーハンドリング
+
+■ 使用技術
+- Web Speech API (SpeechRecognition)
+- ブラウザネイティブAPI
+-->
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Speech API 音声認識デモ</title>
+</head>
+<body>
+    <h1>音声認識デモ</h1>
+    <!-- 音声認識の開始/停止ボタン -->
+    <button id="startButton">音声認識を開始</button>
+    <button id="stopButton" disabled>音声認識を停止</button>
+    <!-- 認識結果を表示する領域 -->
+    <div id="output" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc;"></div>
+
+    <script>
+        // DOM要素の取得
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const outputDiv = document.getElementById('output');
+
+        // Web Speech APIの初期化
+        // ブラウザの互換性のためにwebkitプレフィックスも考慮
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.lang = 'ja-JP'; // 日本語設定
+        recognition.interimResults = true; // 中間結果を取得する
+        recognition.continuous = true; // 連続認識モード
+
+        // 無音状態を検出するためのタイマー
+        let silenceTimer = null;
+        // 確定した認識結果を保持する変数
+        let finalTranscript = '';
+
+        // 音声認識開始処理
+        startButton.addEventListener('click', () => {
+            recognition.start(); // 音声認識を開始
+            startButton.disabled = true; // 開始ボタンを無効化
+            stopButton.disabled = false; // 停止ボタンを有効化
+            outputDiv.textContent = '認識中...'; // 状態表示
+        });
+
+        // 音声認識停止処理
+        stopButton.addEventListener('click', () => {
+            recognition.stop(); // 音声認識を停止
+            startButton.disabled = false; // 開始ボタンを有効化
+            stopButton.disabled = true; // 停止ボタンを無効化
+        });
+
+        // 音声認識結果イベント
+        recognition.addEventListener('result', (event) => {
+            // 無音タイマーをリセット
+            clearTimeout(silenceTimer);
+
+            // 認識結果を取得して結合
+            const transcript = Array.from(event.results)
+                .map(result => result[0]) // 最初の代替結果を取得
+                .map(result => result.transcript) // テキスト部分を抽出
+                .join(''); // 複数の結果がある場合に結合
+
+            // 認識結果を画面に表示
+            outputDiv.textContent = transcript;
+
+            // 確定した結果かどうかをチェック
+            if (event.results[0].isFinal) {
+                finalTranscript = transcript; // 確定結果を保存
+            }
+
+            // 3秒間無音状態が続いた場合の処理
+            silenceTimer = setTimeout(() => {
+                if (finalTranscript) {
+                    // 確定した結果があればそれを表示
+                    outputDiv.textContent = finalTranscript;
+                    finalTranscript = ''; // 確定結果をクリア
+                }
+                recognition.stop(); // 一旦停止して再開（無音状態のリセット）
+            }, 3000);
+        });
+
+        // 音声認識終了イベント
+        recognition.addEventListener('end', () => {
+            // 停止ボタンが有効な場合（ユーザーが停止を意図していない場合）のみ再開
+            if (stopButton.disabled === false) {
+                recognition.start();
+            }
+        });
+
+        // エラー処理
+        recognition.addEventListener('error', (event) => {
+            outputDiv.textContent = 'エラーが発生しました: ' + event.error;
+            startButton.disabled = false; // 開始ボタンを有効化
+            stopButton.disabled = true; // 停止ボタンを無効化
+        });
+    </script>
+</body>
+</html>

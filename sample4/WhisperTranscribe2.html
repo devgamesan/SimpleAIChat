@@ -1,0 +1,187 @@
+<!-- 
+OpenAI Whisper 音声認識デモ（セグメント送信）の動作説明
+--------------------------------------------------
+このファイルは、ブラウザ上で音声を録音し、無音検出によってセグメントごとにOpenAI Whisper APIに送信するデモアプリです。
+
+【主な処理フロー】
+1. 録音開始ボタンでマイクアクセスを開始
+2. 音声検出（SILENCE_THRESHOLD以上）時に録音を継続
+3. 無音（SILENCE_THRESHOLD以下）がSILENCE_DELAY（1秒）続いた時点でセグメントを分割
+4. 分割されたセグメントをOpenAI Whisper APIに送信して文字起こし
+5. 結果を画面に表示
+
+【重要な設定値】
+- OPENAI_API_KEY: 本番環境では環境変数に保管することを推奨（現在はダミー値）
+- SILENCE_THRESHOLD: 無音判定の音量閾値（0.01が標準値）
+- SILENCE_DELAY: 無音とみなす時間（1000ms=1秒）
+
+【処理の特徴】
+・リアルタイム音声検出とセグメント送信を同時に行う
+・無音検出時に自動で録音を停止し、次のセグメントを待機
+・認識結果は画面に累積表示される
+・録音中にエラーが発生しても自動で再録音を試行
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>OpenAI Whisper 音声認識デモ（セグメント送信）</title>
+  <style>
+    #output {
+      margin-top:20px;
+      padding:10px;
+      border:1px solid #ccc;
+      min-height:2em;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>OpenAI Whisper 音声認識デモ（セグメント送信）</h1>
+  <button id="start">録音開始</button>
+  <button id="stop" disabled>録音停止</button>
+  <div id="output">ここに結果が表示されます</div>
+
+  <script>
+    // --- 設定 ---
+    const OPENAI_API_KEY    = 'input_your_key';
+    const SILENCE_THRESHOLD = 0.01;    // 無音判定の音量閾値
+    const SILENCE_DELAY     = 1000;    // 無音が続いたとみなすまでの時間（1秒）
+
+    // --- DOM 要素 ---
+    const btnStart = document.getElementById('start');
+    const btnStop  = document.getElementById('stop');
+    const output   = document.getElementById('output');
+
+    // --- 録音／無音検出用変数 ---
+    let mediaRecorder, audioChunks = [];
+    let audioContext, analyser, sourceNode, processor;
+    let silenceTimer = null;
+    let isRecording  = false;
+    let hasVoice     = false;  // 音声検出フラグ
+
+    // 録音開始
+    btnStart.addEventListener('click', async () => {
+      btnStart.disabled = true;
+      btnStop.disabled  = false;
+      output.textContent = '録音中…（無音1秒で区切って送信）';
+
+      isRecording = true;
+      audioChunks = [];
+      hasVoice    = false;
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext();
+      analyser     = audioContext.createAnalyser();
+      sourceNode   = audioContext.createMediaStreamSource(stream);
+      processor    = audioContext.createScriptProcessor(2048, 1, 1);
+
+      sourceNode.connect(analyser);
+      analyser.connect(processor);
+      processor.connect(audioContext.destination);
+      processor.onaudioprocess = detectSilence;
+
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.onstop = onRecordingStop;
+      mediaRecorder.start();
+    });
+
+    // 録音停止（手動）
+    btnStop.addEventListener('click', stopRecording);
+
+    function stopRecording() {
+      isRecording = false;
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+      btnStop.disabled = true;
+      processor.disconnect();
+      sourceNode.disconnect();
+      analyser.disconnect();
+    }
+
+    // 無音検出
+    function detectSilence(e) {
+      const data = e.inputBuffer.getChannelData(0);
+      let rms = 0;
+      for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
+      rms = Math.sqrt(rms / data.length);
+
+      if (rms < SILENCE_THRESHOLD) {
+        if (!silenceTimer) {
+          silenceTimer = setTimeout(() => {
+            silenceTimer = null;
+            sendSegment();
+          }, SILENCE_DELAY);
+        }
+      } else {
+        hasVoice = true;  // 音声あり
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      }
+    }
+
+    // 区切り送信（無音1秒で呼ばれる）
+    function sendSegment() {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    }
+
+    // 録音停止後に呼ばれる（Whisper API へ送信）
+    async function onRecordingStop() {
+      // 音声検出なしならスキップ
+      if (!hasVoice) {
+        if (isRecording) {
+          audioChunks = [];
+          mediaRecorder.start();
+        } else {
+          btnStart.disabled = false;
+        }
+        return;
+      }
+      // フラグリセット
+      hasVoice = false;
+
+      output.textContent += '\n[送信中…]';
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const form = new FormData();
+      form.append('file', blob, 'speech.webm');
+      form.append('model', 'whisper-1');
+
+      try {
+        const res  = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+          body: form
+        });
+        const json = await res.json();
+        if (json.text) {
+          output.textContent += '\n' + json.text;
+        } else {
+          output.textContent += '\n[認識失敗]';
+        }
+      } catch (err) {
+        output.textContent += '\n[エラー] ' + err.message;
+      } finally {
+        if (isRecording) {
+          // 継続録音：チャンクリセット＆再スタート
+          audioChunks = [];
+          mediaRecorder.start();
+        } else {
+          // 完全停止：録音ボタンを復活
+          btnStart.disabled = false;
+        }
+      }
+    }
+  </script>
+</body>
+</html>
