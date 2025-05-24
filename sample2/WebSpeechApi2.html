@@ -78,7 +78,7 @@ Web Speech API 音声認識デモ
                 .map(result => result.transcript) // テキスト部分を抽出
                 .join(''); // 複数の結果がある場合に結合
 
-            // 認識結果を画面に表示
+            // 認識結果をリアルタイムで画面に表示
             outputDiv.textContent = transcript;
 
             // 確定した結果かどうかをチェック

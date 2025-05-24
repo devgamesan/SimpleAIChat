@@ -75,6 +75,9 @@
                 .map(result => result.transcript) // 認識テキストを抽出
                 .join(''); // 複数の結果がある場合に結合
 
+            // リアルタイムで表示
+            outputDiv.textContent = transcript;
+
             // 無音検出用タイマーを設定（3秒間無音状態が続いた場合の処理）
             silenceTimer = setTimeout(() => {
                 // 最終的な認識結果を表示
