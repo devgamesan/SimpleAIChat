@@ -1,0 +1,186 @@
+<!-- 
+  OpenAI Whisper 音声認識デモ（WebSocket版）
+  
+  このファイルは、ブラウザで音声を録音し、OpenAI Whisperモデルに音声認識を依頼するデモです。
+  主な処理フロー：
+  1. ユーザーが「録音開始」ボタンをクリックすると、マイクから音声を取得
+  2. 音声を48kHzで録音し、無音検出（1秒間の無音）で音声セグメントに分割
+  3. 分割された音声データをWebSocket経由でローカルサーバー（ポート8000）に送信
+  4. サーバーが認識結果を返すと、結果をブラウザ上にリアルタイム表示
+  
+  使用技術：
+  - Web Audio API（AudioContext）による音声処理
+  - WebSocketによるサーバー通信
+  - リアルタイム音声認識処理
+ -->
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>OpenAI Whisper 音声認識デモ</title>
+  <style>
+    #output {
+      margin-top: 20px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      min-height: 2em;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>音声認識デモ</h1>
+  <button id="start">録音開始</button>
+  <button id="stop" disabled>録音停止</button>
+  <div id="output">ここに結果が表示されます</div>
+
+  <!-- 音声認識処理のスクリプト -->
+  <script>
+    // --- 設定パラメータ ---
+    const SILENCE_THRESHOLD = 0.01;
+    const SILENCE_DELAY = 1000;
+    const ws = new WebSocket('ws://localhost:8000');
+
+    // --- DOM要素 ---
+    const btnStart = document.getElementById('start');
+    const btnStop = document.getElementById('stop');
+    const output = document.getElementById('output');
+
+    // --- 録音／無音検出用 ---
+    let audioContext, analyser, processor, sourceNode;
+    let isRecording = false;
+    let silenceTimer = null;
+    let floatChunks = [];
+
+    // --- サーバーからのメッセージ受信 ---
+    ws.onmessage = event => {
+      try {
+        const res = JSON.parse(event.data);
+        if (res.text) {
+          output.textContent += '\n' + res.text;
+        } else if (res.error) {
+          output.textContent += '\n[エラー] ' + res.error;
+        }
+      } catch {
+        // バイナリ等、JSON以外を無視
+      }
+    };
+
+    // --- 録音開始 ---
+    btnStart.addEventListener('click', async () => {
+      btnStart.disabled = true;
+      btnStop.disabled = false;
+      output.textContent = '録音中…（無音1.0秒で区切って送信）';
+      isRecording = true;
+      floatChunks = [];
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      initializeAudioNodes(stream);
+    });
+    // --- 録音停止 ---
+    btnStop.addEventListener('click', () => {
+      isRecording = false;
+      clearTimeout(silenceTimer);
+      disconnectAudioNodes();
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    });
+
+    // --- 音声処理ノードの初期化 ---
+    function initializeAudioNodes(stream) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 48000
+      });
+      analyser = audioContext.createAnalyser();
+      sourceNode = audioContext.createMediaStreamSource(stream);
+      processor = audioContext.createScriptProcessor(2048, 1, 1);
+
+      sourceNode.connect(analyser);
+      analyser.connect(processor);
+      processor.connect(audioContext.destination);
+
+      processor.onaudioprocess = onAudioProcess;
+    }
+
+    // --- 音声処理ノードの切断 ---
+    function disconnectAudioNodes() {
+      if (processor) processor.disconnect();
+      if (analyser) analyser.disconnect();
+      if (sourceNode) sourceNode.disconnect();
+    }
+
+    // --- 音声処理 ---
+    function onAudioProcess(e) {
+      const data = e.inputBuffer.getChannelData(0);
+      const avg = calculateRMS(data);
+
+      if (avg < SILENCE_THRESHOLD) {
+        if (!silenceTimer && floatChunks.length > 0) {
+          silenceTimer = setTimeout(() => {
+            silenceTimer = null;
+            sendSegment();
+          }, SILENCE_DELAY);
+        }
+      } else {
+        floatChunks.push(new Float32Array(data));
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      }
+    }
+
+    // --- RMS計算 ---
+    function calculateRMS(data) {
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        sum += Math.abs(data[i]);
+      }
+      return sum / data.length;
+    }
+
+    // --- セグメント送信 ---
+    function sendSegment() {
+      if (floatChunks.length < 10) {
+        output.textContent += '\n[無音データは送信しません]';
+        floatChunks = [];
+        return;
+    }
+
+      const floatAll = concatenateFloatChunks(floatChunks);
+      const int16 = convertTo16BitPCM(floatAll);
+
+      console.log("Int16 Data Sample:", int16.slice(0, 10));
+      ws.send(int16.buffer);
+      output.textContent += '\n[セグメント送信]';
+      floatChunks = [];
+    }
+
+    // --- Float32Arrayの連結 ---
+    function concatenateFloatChunks(chunks) {
+      const totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
+      const result = new Float32Array(totalLen);
+      let offset = 0;
+      chunks.forEach(chunk => {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      });
+      return result;
+    }
+
+    // --- 16bit PCM変換 ---
+    function convertTo16BitPCM(floatData) {
+      const int16 = new Int16Array(floatData.length);
+      for (let i = 0; i < floatData.length; i++) {
+        const s = Math.max(-1, Math.min(1, floatData[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return int16;
+    }
+  </script>
+</body>
+
+</html>
