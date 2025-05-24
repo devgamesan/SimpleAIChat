@@ -25,10 +25,9 @@ import json
 import io
 import base64
 
-# OpenAI APIキーの取得（本番環境では環境変数を使用することを推奨）
-# ここではデバッグ用に直接記述していますが、実際の運用では.envファイルやクラウドコンソールで管理してください
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 # デバッグ用のAPIキー（開発中にのみ使用し、本番環境では削除してください）
+# ここではデバッグ用に直接記述していますが、実際の運用では.envファイルやクラウドコンソールで管理してください
 OPENAI_API_KEY = "your_api_key"
 
 # 非同期用OpenAIクライアントの初期化
