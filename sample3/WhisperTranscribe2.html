@@ -45,7 +45,7 @@ OpenAI Whisper 音声認識デモ（セグメント送信）の動作説明
 
   <script>
     // --- 設定 ---
-    const OPENAI_API_KEY    = 'input_your_key';
+    const OPENAI_API_KEY = 'your api key';
     const SILENCE_THRESHOLD = 0.01;    // 無音判定の音量閾値
     const SILENCE_DELAY     = 1000;    // 無音が続いたとみなすまでの時間（1秒）
 
@@ -156,6 +156,7 @@ OpenAI Whisper 音声認識デモ（セグメント送信）の動作説明
       const form = new FormData();
       form.append('file', blob, 'speech.webm');
       form.append('model', 'whisper-1');
+      form.append('language', "ja")
 
       try {
         const res  = await fetch('https://api.openai.com/v1/audio/transcriptions', {

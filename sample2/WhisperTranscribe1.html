@@ -40,7 +40,7 @@ OpenAI Whisper 音声認識デモ用 HTML ファイル
   <script>
     // --- 設定 ---
     // OpenAI Whisper API の認証キー（ご自身のキーに置き換えてください）
-    const OPENAI_API_KEY = 'input_your_api_key';
+    const OPENAI_API_KEY = 'your api key';
     // 音量がこのレベル未満を「無音」とみなす閾値
     const SILENCE_THRESHOLD = 0.01;
     // 無音が続いたとみなすまでの時間（ミリ秒）
@@ -141,6 +141,7 @@ OpenAI Whisper 音声認識デモ用 HTML ファイル
       const form = new FormData();
       form.append('file', blob, 'speech.webm');
       form.append('model', 'whisper-1');
+      form.append('language', "ja")
 
       try {
         // Whisper API にPOSTリクエストを送信

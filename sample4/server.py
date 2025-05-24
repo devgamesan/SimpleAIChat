@@ -28,7 +28,7 @@ import base64
 
 # デバッグ用のAPIキー（開発中にのみ使用し、本番環境では削除してください）
 # ここではデバッグ用に直接記述していますが、実際の運用では.envファイルやクラウドコンソールで管理してください
-OPENAI_API_KEY = "your_api_key"
+OPENAI_API_KEY = "your api key"
 
 # 非同期用OpenAIクライアントの初期化
 # これにより、WebSocket経由で受け取った音声データを非同期に処理できます
@@ -62,7 +62,8 @@ async def handle_connection(websocket):
                 # 音声データをテキストに変換します
                 response = await client.audio.transcriptions.create(
                     model="whisper-1",  # 使用するモデル
-                    file=("audio.webm", file_obj)  # ファイル名と形式を指定
+                    file=("audio.webm", file_obj),  # ファイル名と形式を指定,
+                    language="ja"  # 例: 日本語に指定
                 )
                 
                 # 6. 結果の送信
