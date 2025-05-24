@@ -1,0 +1,211 @@
+<!-- 
+このHTMLファイルは、Webブラウザ上で音声を録音し、OpenAI Whisper APIにセグメントごとに音声データを送信するデモです。
+以下に処理の概要を説明します：
+
+1. マイクアクセスと音声処理の初期化
+   - ユーザーが「録音開始」ボタンをクリックすると、マイクにアクセスし、音声処理用のAudioContextをセットアップします。
+
+2. 無音検出とセグメント送信
+   - 100msごとに音量を検出し、無音が1秒間続いた場合にセグメントを送信します。
+   - セグメントはWebSocket経由でサーバーに送信され、サーバー側でOpenAI Whisper APIに送信されます。
+
+3. 録音停止処理
+   - 「録音停止」ボタンをクリックすると、録音を終了し、セグメント送信処理を実行します。
+
+4. サーバーとの通信
+   - WebSocket経由でサーバーと通信し、音声認識結果をブラウザに表示します。
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>OpenAI Whisper 音声認識デモ（セグメント送信）</title>
+  <style>
+    #output {
+      margin-top:20px;
+      padding:10px;
+      border:1px solid #ccc;
+      min-height:2em;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>OpenAI Whisper 音声認識デモ（セグメント送信）</h1>
+  <button id="start">録音開始</button>
+  <button id="stop" disabled>録音停止</button>
+  <div id="output">ここに結果が表示されます</div>
+
+  <script>
+    // --- 設定パラメータ ---
+    // OpenAI APIキー（実際のキーに置き換える）
+    const OPENAI_API_KEY    = 'input_your_key';
+    // 無音判定の音量閾値（0.0〜1.0）
+    const SILENCE_THRESHOLD = 0.01;    
+    // 無音とみなす時間（ミリ秒）
+    const SILENCE_DELAY     = 1000;    
+
+    // --- DOM要素の取得 ---
+    const btnStart = document.getElementById('start');
+    const btnStop  = document.getElementById('stop');
+    const output   = document.getElementById('output');
+
+    // --- 録音／無音検出用変数 ---
+    let mediaRecorder, audioChunks = [];
+    let audioContext, analyser, sourceNode, processor;
+    let silenceTimer = null;  // 無音検出タイマー
+    let isRecording  = false; // 録音中フラグ
+    let hasVoice     = false; // 音声検出フラグ
+
+    // --- WebSocket接続（バックエンドサーバに接続） ---
+    const ws = new WebSocket('ws://localhost:8000');
+
+    // サーバーからのメッセージ受信
+    ws.onmessage = function(event) {
+      const response = JSON.parse(event.data);
+      if (response.text) {
+        output.textContent += '\n' + response.text;
+      } else if (response.error) {
+        output.textContent += '\n[エラー] ' + response.error;
+      }
+    };
+
+    // 録音開始ボタンクリック処理
+    btnStart.addEventListener('click', async () => {
+      // ボタン状態の更新
+      btnStart.disabled = true;
+      btnStop.disabled  = false;
+      output.textContent = '録音中…（無音1秒で区切って送信）';
+
+      // 録音状態初期化
+      isRecording = true;
+      audioChunks = [];
+      hasVoice    = false;
+
+      // マイクアクセスと音声処理のセットアップ
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext();
+      analyser     = audioContext.createAnalyser();
+      sourceNode   = audioContext.createMediaStreamSource(stream);
+      processor    = audioContext.createScriptProcessor(2048, 1, 1);
+
+      // 音声処理フローセットアップ
+      sourceNode.connect(analyser);
+      analyser.connect(processor);
+      processor.connect(audioContext.destination);
+      processor.onaudioprocess = detectSilence;
+
+      // MediaRecorderのセットアップ
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.onstop = onRecordingStop;
+      mediaRecorder.start();
+    });
+
+    // 録音停止ボタンクリック処理
+    btnStop.addEventListener('click', stopRecording);
+
+    function stopRecording() {
+      // 録音状態終了
+      isRecording = false;
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      
+      // メディアリコーダー停止
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+      
+      // ボタン状態復元
+      btnStop.disabled = true;
+      
+      // 音声処理ノード切断
+      processor.disconnect();
+      sourceNode.disconnect();
+      analyser.disconnect();
+    }
+
+    // 無音検出処理（100msごとに実行）
+    function detectSilence(e) {
+      // 音量計算（RMS値）
+      const data = e.inputBuffer.getChannelData(0);
+      let rms = 0;
+      for (let i = 0; i < data.length; i++) rms += data[i] * data[i];
+      rms = Math.sqrt(rms / data.length);
+
+      // 無音判定
+      if (rms < SILENCE_THRESHOLD) {
+        if (!silenceTimer) {
+          // 無音検出時のタイマー設定
+          silenceTimer = setTimeout(() => {
+            silenceTimer = null;
+            sendSegment();  // セグメント送信
+          }, SILENCE_DELAY);
+        }
+      } else {
+        hasVoice = true;  // 音声あり
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      }
+    }
+
+    // セグメント送信処理
+    function sendSegment() {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      
+      // メディアリコーダー停止（無音検出時）
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    }
+
+    // 録音停止後の処理（Whisper API へ送信）
+    async function onRecordingStop() {
+      // 音声なしの場合の処理
+      if (!hasVoice) {
+        if (isRecording) {
+          audioChunks = [];
+          // 新しいMediaRecorderインスタンスを作成して録音再開
+          const stream = mediaRecorder.stream;
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+          mediaRecorder.onstop = onRecordingStop;
+          mediaRecorder.start();
+        } else {
+          btnStart.disabled = false;
+        }
+        return; // 音声なしの場合はここで処理を終了
+      }
+      hasVoice = false;
+
+      output.textContent += '\n[送信中…]';
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      
+      // BlobをBase64に変換
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64data = reader.result.split(',')[1];
+        ws.send(JSON.stringify({
+          type: 'audio_chunk',
+          data: base64data  // Base64文字列として送信
+        }));
+      };
+      reader.readAsDataURL(blob);
+
+      // 録音を再開
+      if (isRecording) {
+        audioChunks = [];
+        const stream = mediaRecorder.stream;
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = onRecordingStop;
+        mediaRecorder.start();
+      }
+    }
+  </script>
+</body>
+</html>
